@@ -2,7 +2,9 @@
 FluoroSense - Advanced Spectrum Analysis
 Second-derivative analysis and model fitting workflow.
 """
+import inspect
 from io import StringIO
+from typing import Optional
 
 import numpy as np
 import pandas as pd
@@ -245,13 +247,126 @@ def plot_derivatives(df: pd.DataFrame, label: str, normalize_area: bool) -> go.F
     return fig
 
 
-def fit_selected_spectrum(df: pd.DataFrame, model_name: str):
-    fit_functions = {
-        "Gaussian": pf.gaussian_fun,
-        "Lognormal": pf.modelfit_fun,
-        "Exponentially modified Gaussian": pf.expgaussian_fun,
+def get_lmfit_model_classes() -> dict[str, type]:
+    import lmfit.models as lmfit_models
+
+    excluded_models = {
+        "ExpressionModel",
+        "Gaussian2dModel",
+        "RectangleModel",
+        "SplineModel",
     }
-    return fit_functions[model_name](df)
+    model_classes = {}
+    for name, obj in vars(lmfit_models).items():
+        if not inspect.isclass(obj) or not name.endswith("Model") or name in excluded_models:
+            continue
+        try:
+            signature = inspect.signature(obj)
+            required_args = [
+                parameter
+                for parameter in signature.parameters.values()
+                if parameter.default is inspect.Parameter.empty
+                and parameter.kind in (inspect.Parameter.POSITIONAL_ONLY, inspect.Parameter.POSITIONAL_OR_KEYWORD)
+            ]
+        except (TypeError, ValueError):
+            continue
+
+        if required_args and name != "PolynomialModel":
+            continue
+
+        try:
+            model = obj(degree=2) if name == "PolynomialModel" else obj()
+            if model.independent_vars != ["x"]:
+                continue
+        except Exception:
+            continue
+        model_classes[name] = obj
+
+    return dict(sorted(model_classes.items()))
+
+
+def create_lmfit_model(model_name: str, polynomial_degree: int = 2):
+    model_classes = get_lmfit_model_classes()
+    if model_name not in model_classes:
+        raise ValueError(f"Unknown lmfit model: {model_name}")
+
+    model_class = model_classes[model_name]
+    if model_name == "PolynomialModel":
+        return model_class(degree=polynomial_degree)
+    return model_class()
+
+
+def make_initial_params(model, df: pd.DataFrame):
+    wavelength = df.index.to_numpy(dtype=float)
+    intensity = df.iloc[:, 0].to_numpy(dtype=float)
+    try:
+        return model.guess(intensity, x=wavelength)
+    except Exception:
+        return model.make_params()
+
+
+def params_to_editor_df(params) -> pd.DataFrame:
+    rows = []
+    for name, param in params.items():
+        rows.append(
+            {
+                "Parameter": name,
+                "Initial value": float(param.value) if param.value is not None else 0.0,
+                "Min": "" if np.isneginf(param.min) else f"{param.min:.6g}",
+                "Max": "" if np.isposinf(param.max) else f"{param.max:.6g}",
+                "Vary": bool(param.vary),
+            }
+        )
+    return pd.DataFrame(rows)
+
+
+def parse_optional_float(value, default: float) -> float:
+    if value is None:
+        return default
+    if isinstance(value, str) and value.strip() == "":
+        return default
+    parsed = float(value)
+    return parsed
+
+
+def apply_edited_params(params, edited_params_df: pd.DataFrame):
+    for _, row in edited_params_df.iterrows():
+        name = row["Parameter"]
+        if name not in params:
+            continue
+
+        value = float(row["Initial value"])
+        min_value = parse_optional_float(row["Min"], -np.inf)
+        max_value = parse_optional_float(row["Max"], np.inf)
+        if min_value >= max_value:
+            raise ValueError(f"Parameter '{name}' has min >= max.")
+
+        params[name].set(
+            value=value,
+            min=min_value,
+            max=max_value,
+            vary=bool(row["Vary"]),
+        )
+    return params
+
+
+def fit_lmfit_model(
+    df: pd.DataFrame,
+    model_name: str,
+    edited_params_df: pd.DataFrame,
+    polynomial_degree: int = 2,
+    fit_method: str = "leastsq",
+    max_nfev: Optional[int] = None,
+):
+    wavelength = df.index.to_numpy(dtype=float)
+    intensity = df.iloc[:, 0].to_numpy(dtype=float)
+    model = create_lmfit_model(model_name, polynomial_degree=polynomial_degree)
+    params = make_initial_params(model, df)
+    params = apply_edited_params(params, edited_params_df)
+    fit_kwargs = {"method": fit_method}
+    if max_nfev:
+        fit_kwargs["max_nfev"] = max_nfev
+    return model.fit(intensity, params, x=wavelength, **fit_kwargs)
 
 
 def plot_model_fit(df: pd.DataFrame, result, model_name: str) -> go.Figure:
@@ -421,52 +536,131 @@ with tab_derivatives:
 with tab_model:
     selected_label = st.selectbox("Spectrum", [item["label"] for item in spectra], key="fit_spectrum")
     selected_item = next(item for item in spectra if item["label"] == selected_label)
-    model_name = st.radio(
-        "Model",
-        ["Gaussian", "Lognormal", "Exponentially modified Gaussian"],
-        horizontal=True,
-    )
 
     try:
-        fit_result = fit_selected_spectrum(selected_item["df"], model_name)
-        st.plotly_chart(
-            plot_model_fit(selected_item["df"], fit_result, model_name),
+        model_classes = get_lmfit_model_classes()
+        preferred_models = [
+            "GaussianModel",
+            "ExponentialGaussianModel",
+            "LognormalModel",
+            "LorentzianModel",
+            "VoigtModel",
+            "PseudoVoigtModel",
+            "SkewedGaussianModel",
+            "StudentsTModel",
+        ]
+        model_options = [model for model in preferred_models if model in model_classes]
+        model_options.extend([model for model in model_classes if model not in model_options])
+
+        model_filter = st.text_input("Filter lmfit models", value="", placeholder="Type to filter model names")
+        filtered_model_options = [
+            model for model in model_options if model_filter.lower() in model.lower()
+        ] or model_options
+        default_model_index = filtered_model_options.index("GaussianModel") if "GaussianModel" in filtered_model_options else 0
+        model_name = st.selectbox(
+            "lmfit model",
+            filtered_model_options,
+            index=default_model_index,
+            help="One-dimensional lmfit model classes are listed. Multi-dimensional and expression models are omitted.",
+        )
+
+        polynomial_degree = 2
+        if model_name == "PolynomialModel":
+            polynomial_degree = st.number_input("Polynomial degree", min_value=1, max_value=12, value=2, step=1)
+
+        model = create_lmfit_model(model_name, polynomial_degree=polynomial_degree)
+        initial_params = make_initial_params(model, selected_item["df"])
+        st.subheader("Initial Fit Parameters")
+        initial_params_df = params_to_editor_df(initial_params)
+        edited_params_df = st.data_editor(
+            initial_params_df,
             width="stretch",
-            config=config,
+            hide_index=True,
+            disabled=["Parameter"],
+            key=f"params_{selected_label}_{model_name}_{polynomial_degree}",
+            column_config={
+                "Initial value": st.column_config.NumberColumn(format="%.6g"),
+                "Min": st.column_config.TextColumn(help="Leave empty for -infinity."),
+                "Max": st.column_config.TextColumn(help="Leave empty for infinity."),
+                "Vary": st.column_config.CheckboxColumn(),
+            },
         )
 
-        col1, col2, col3 = st.columns(3)
-        col1.metric("Chi-square", f"{fit_result.chisqr:.4g}")
-        col2.metric("Reduced chi-square", f"{fit_result.redchi:.4g}")
-        col3.metric("R²", f"{getattr(fit_result, 'rsquared', np.nan):.4g}")
+        fit_col1, fit_col2 = st.columns(2)
+        with fit_col1:
+            fit_method = st.selectbox(
+                "Fit method",
+                ["leastsq", "least_squares", "nelder", "powell", "lbfgsb", "cg", "bfgs"],
+                index=0,
+            )
+        with fit_col2:
+            max_nfev = st.number_input(
+                "Max function evaluations",
+                min_value=0,
+                value=0,
+                step=100,
+                help="Use 0 for lmfit's default.",
+            )
 
-        params_df = pd.DataFrame(
-            [
+        if st.button("Run fit", type="primary"):
+            fit_result = fit_lmfit_model(
+                selected_item["df"],
+                model_name,
+                edited_params_df,
+                polynomial_degree=polynomial_degree,
+                fit_method=fit_method,
+                max_nfev=None if max_nfev == 0 else int(max_nfev),
+            )
+            st.session_state["advanced_fit_result"] = fit_result
+            st.session_state["advanced_fit_model"] = model_name
+            st.session_state["advanced_fit_spectrum"] = selected_label
+
+        fit_result = st.session_state.get("advanced_fit_result")
+        fit_model = st.session_state.get("advanced_fit_model")
+        fit_spectrum = st.session_state.get("advanced_fit_spectrum")
+
+        if fit_result is not None and fit_model == model_name and fit_spectrum == selected_label:
+            st.plotly_chart(
+                plot_model_fit(selected_item["df"], fit_result, model_name),
+                width="stretch",
+                config=config,
+            )
+
+            col1, col2, col3 = st.columns(3)
+            col1.metric("Chi-square", f"{fit_result.chisqr:.4g}")
+            col2.metric("Reduced chi-square", f"{fit_result.redchi:.4g}")
+            col3.metric("R²", f"{getattr(fit_result, 'rsquared', np.nan):.4g}")
+
+            params_df = pd.DataFrame(
+                [
+                    {
+                        "Parameter": name,
+                        "Value": param.value,
+                        "Standard error": param.stderr,
+                        "Min": param.min,
+                        "Max": param.max,
+                        "Vary": param.vary,
+                    }
+                    for name, param in fit_result.params.items()
+                ]
+            )
+            st.subheader("Fit Parameters")
+            st.dataframe(params_df, width="stretch", hide_index=True)
+
+            fit_export = pd.DataFrame(
                 {
-                    "Parameter": name,
-                    "Value": param.value,
-                    "Standard error": param.stderr,
+                    "Wavelength [nm]": selected_item["df"].index,
+                    "Intensity": selected_item["df"].iloc[:, 0].to_numpy(dtype=float),
+                    "Fit": fit_result.best_fit,
+                    "Residual": fit_result.residual,
                 }
-                for name, param in fit_result.params.items()
-            ]
-        )
-        st.subheader("Fit Parameters")
-        st.dataframe(params_df, width="stretch", hide_index=True)
-
-        fit_export = pd.DataFrame(
-            {
-                "Wavelength [nm]": selected_item["df"].index,
-                "Intensity": selected_item["df"].iloc[:, 0].to_numpy(dtype=float),
-                "Fit": fit_result.best_fit,
-                "Residual": fit_result.residual,
-            }
-        )
-        st.download_button(
-            "Download fit data",
-            data=fit_export.to_csv(index=False).encode("utf-8"),
-            file_name=f"{selected_label}_{model_name.lower().replace(' ', '_')}_fit.csv",
-            mime="text/csv",
-        )
+            )
+            st.download_button(
+                "Download fit data",
+                data=fit_export.to_csv(index=False).encode("utf-8"),
+                file_name=f"{selected_label}_{model_name.lower()}_fit.csv",
+                mime="text/csv",
+            )
     except ImportError as exc:
         st.warning(str(exc))
     except Exception as exc:

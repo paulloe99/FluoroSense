@@ -572,7 +572,21 @@ def apply_dark_lab_theme():
     /* ---- Hide Streamlit Branding ---- */
     #MainMenu {visibility: hidden;}
     footer {visibility: hidden;}
-    header {visibility: hidden;}
+
+    /*
+       Keep Streamlit's header mounted and visible enough for the sidebar
+       expand/collapse control. Hiding the whole header also hides the control
+       that reopens a collapsed sidebar.
+    */
+    header[data-testid="stHeader"] {
+        background: transparent;
+    }
+
+    [data-testid="stToolbar"],
+    [data-testid="stDecoration"],
+    [data-testid="stStatusWidget"] {
+        visibility: hidden;
+    }
 
     /* ---- Print Styles ---- */
     @media print {

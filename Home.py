@@ -28,13 +28,16 @@ st.markdown("""
 # Navigation buttons
 col1, col2, col3 = st.columns([1, 2, 1])
 with col2:
-    c1, c2 = st.columns(2)
+    c1, c2, c3 = st.columns(3)
     with c1:
         if st.button("🔬 Individual Spectra", width='stretch'):
             st.switch_page("pages/1_🔬_Individual_Spectra.py")
     with c2:
         if st.button("⏳ Time Series Analysis", width='stretch'):
             st.switch_page("pages/2_⏳_Time_Series_Measurement.py")
+    with c3:
+        if st.button("🧪 Advanced Analysis", width='stretch'):
+            st.switch_page("pages/3_🧪_Advanced_Spectrum_Analysis.py")
 
 st.markdown("---")
 

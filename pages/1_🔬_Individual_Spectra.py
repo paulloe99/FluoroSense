@@ -8,7 +8,8 @@ import streamlit as st
 st.set_page_config(
     layout="wide",
     page_title="Individual Spectra",
-    page_icon="🔬"
+    page_icon="🔬",
+    initial_sidebar_state="expanded"
 )
 
 from styles import apply_dark_lab_theme, get_plotly_dark_template, EMISSION_PALETTE

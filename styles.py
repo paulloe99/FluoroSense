@@ -574,18 +574,63 @@ def apply_dark_lab_theme():
     footer {visibility: hidden;}
 
     /*
-       Keep Streamlit's header mounted and visible enough for the sidebar
-       expand/collapse control. Hiding the whole header also hides the control
-       that reopens a collapsed sidebar.
+       Keep Streamlit's header mounted and interactive. The collapsed-sidebar
+       reopen button is rendered in the header area, so hiding or disabling the
+       whole header can leave the app with no visible way to reopen navigation.
     */
     header[data-testid="stHeader"] {
         background: transparent;
+        display: block !important;
+        visibility: visible !important;
+        pointer-events: auto !important;
     }
 
     [data-testid="stToolbar"],
     [data-testid="stDecoration"],
     [data-testid="stStatusWidget"] {
         visibility: hidden;
+    }
+
+    [data-testid="stSidebarCollapseButton"],
+    [data-testid="stSidebarCollapseButton"] *,
+    [data-testid="stSidebarCollapsedControl"],
+    [data-testid="stSidebarCollapsedControl"] *,
+    button[data-testid="stExpandSidebarButton"],
+    button[data-testid="stExpandSidebarButton"] *,
+    button[aria-label*="sidebar" i],
+    button[aria-label*="sidebar" i] *,
+    button[title*="sidebar" i],
+    button[title*="sidebar" i] * {
+        display: inline-flex !important;
+        align-items: center;
+        justify-content: center;
+        visibility: visible !important;
+        opacity: 1 !important;
+        pointer-events: auto !important;
+        z-index: 999999 !important;
+    }
+
+    [data-testid="stSidebarCollapsedControl"],
+    button[data-testid="stExpandSidebarButton"],
+    button[aria-label*="expand sidebar" i],
+    button[aria-label*="open sidebar" i],
+    button[title*="expand sidebar" i],
+    button[title*="open sidebar" i] {
+        position: fixed !important;
+        top: 0.75rem !important;
+        left: 0.75rem !important;
+        width: 2.5rem !important;
+        height: 2.5rem !important;
+        min-width: 2.5rem !important;
+        min-height: 2.5rem !important;
+        border-radius: var(--radius-sm) !important;
+        background: var(--bg-secondary) !important;
+        border: 1px solid var(--border-color) !important;
+        box-shadow: var(--shadow-md) !important;
+        visibility: visible !important;
+        opacity: 1 !important;
+        pointer-events: auto !important;
+        z-index: 999999 !important;
     }
 
     /* ---- Print Styles ---- */
